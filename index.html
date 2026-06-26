@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cartoon Character 3D Timer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body,
+        html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #fce4ec;
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        #loading {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #fce4ec;
+            color: #ff4081;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', sans-serif;
+            font-size: 2rem;
+            font-weight: bold;
+            letter-spacing: 0.05em;
+            z-index: 10;
+            transition: opacity 0.5s ease;
+        }
+    </style>
+    <!-- Import Three.js -->
+    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+</head>
+
+<body>
+    <div id="loading">STARTING TIMER...</div>
+    <div id="canvas-container"></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+        import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+
+        // --- Target Date (10:00 PM Geneva Time) ---
+        const targetDate = new Date("2026-06-26T22:00:00+02:00").getTime();
+
+        // --- Scene & Renderer ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#fdf5e6');
+
+        const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 500);
+        camera.position.set(0, 0, 55);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        // Shadows removed
+        container.appendChild(renderer.domElement);
+
+        // --- Lighting ---
+        const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(ambient);
+
+        const dirLight = new THREE.DirectionalLight(0xfff0dd, 1.2);
+        dirLight.position.set(10, 30, 20);
+        // Shadows removed
+        scene.add(dirLight);
+
+        const fillLight = new THREE.DirectionalLight(0xcceeff, 0.6);
+        fillLight.position.set(-15, 10, -15);
+        scene.add(fillLight);
+
+        // Controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.enablePan = true;
+        controls.target.set(0, 0, 0);
+
+        // --- Materials ---
+        function createToyMaterial(colorHex) {
+            return new THREE.MeshStandardMaterial({
+                color: colorHex,
+                roughness: 0.3,
+                metalness: 0.1,
+            });
+        }
+
+        const materials = {
+            w: createToyMaterial('#ff5252'),
+            d: createToyMaterial('#ff9800'),
+            h: createToyMaterial('#ffd600'),
+            m: createToyMaterial('#4caf50'),
+            s: createToyMaterial('#00bcd4')
+        };
+
+        // --- Geometry Cache ---
+        const geoCache = {};
+
+        function createGeo(text, size = 3) {
+            const geo = new TextGeometry(text, {
+                font: loadedFont,
+                size: size,
+                height: 1.0,
+                curveSegments: 8,
+                bevelEnabled: true,
+                bevelThickness: 0.4,
+                bevelSize: 0.3,
+                bevelOffset: 0,
+                bevelSegments: 8
+            });
+            geo.computeBoundingBox();
+
+            const xOffset = -0.5 * (geo.boundingBox.max.x - geo.boundingBox.min.x);
+            const zOffset = -0.5 * (geo.boundingBox.max.z - geo.boundingBox.min.z);
+
+            geo.translate(xOffset, -geo.boundingBox.min.y, zOffset);
+
+            geo.userData = {
+                width: geo.boundingBox.max.x - geo.boundingBox.min.x,
+                depth: geo.boundingBox.max.z - geo.boundingBox.min.z,
+                height: geo.boundingBox.max.y - geo.boundingBox.min.y
+            };
+            return geo;
+        }
+
+        let loadedFont = null;
+        const loader = new FontLoader();
+
+        // --- Timer UI State ---
+        const timerGroup = new THREE.Group();
+        scene.add(timerGroup);
+
+        const digitMeshes = {};
+        const animations = [];
+        const allCharacters = [];
+
+        // --- Add Character Features to Mesh ---
+        function addCartoonFeatures(mesh) {
+            // Eyes
+            const eyeGeo = new THREE.SphereGeometry(0.4, 16, 16);
+            const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+            const pupilGeo = new THREE.SphereGeometry(0.18, 16, 16);
+            const pupilMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2 });
+
+            const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+            const leftPupil = new THREE.Mesh(pupilGeo, pupilMat);
+            leftPupil.position.set(0, 0, 0.25);
+            leftEye.add(leftPupil);
+            mesh.add(leftEye);
+            mesh.userData.leftEye = leftEye;
+            mesh.userData.leftPupil = leftPupil;
+
+            const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+            const rightPupil = new THREE.Mesh(pupilGeo, pupilMat);
+            rightPupil.position.set(0, 0, 0.25);
+            rightEye.add(rightPupil);
+            mesh.add(rightEye);
+            mesh.userData.rightEye = rightEye;
+            mesh.userData.rightPupil = rightPupil;
+
+            // Hair (Spiky tuft)
+            const hairGroup = new THREE.Group();
+            const hairGeo = new THREE.ConeGeometry(0.25, 1.2, 8);
+            hairGeo.translate(0, 0.6, 0); // Pivot at the base
+            const hairMat = new THREE.MeshStandardMaterial({ color: 0x4e342e, roughness: 0.9 });
+
+            const tuft1 = new THREE.Mesh(hairGeo, hairMat);
+            tuft1.rotation.x = Math.PI / 12;
+            hairGroup.add(tuft1);
+
+            const tuft2 = new THREE.Mesh(hairGeo, hairMat);
+            tuft2.position.set(-0.35, -0.2, 0);
+            tuft2.rotation.z = Math.PI / 5;
+            hairGroup.add(tuft2);
+
+            const tuft3 = new THREE.Mesh(hairGeo, hairMat);
+            tuft3.position.set(0.35, -0.2, 0);
+            tuft3.rotation.z = -Math.PI / 5;
+            hairGroup.add(tuft3);
+
+            mesh.add(hairGroup);
+            mesh.userData.hair = hairGroup;
+
+            mesh.userData.hairPhase = Math.random() * Math.PI * 2;
+        }
+
+        // Dynamically position features based on the specific digit's width, height, and depth
+        function updateCartoonFeatures(mesh, geo) {
+            const height = geo.userData.height;
+            const frontZ = (geo.userData.depth / 2) + 0.1;
+
+            // Eyes: centered together on the front face, adjusted to height
+            mesh.userData.leftEye.position.set(-0.35, height * 0.6, frontZ);
+            mesh.userData.rightEye.position.set(0.35, height * 0.6, frontZ);
+
+            // Hair: placed perfectly on top of the geometry
+            mesh.userData.hair.position.set(0, height - 0.2, 0);
+        }
+
+        function createDigitSlot(id, material, parentGroup) {
+            const startGeo = geoCache['0'];
+            const mesh = new THREE.Mesh(startGeo, material);
+            mesh.userData = { baseId: id, currentVal: '0', baseY: 0 };
+
+            addCartoonFeatures(mesh);
+            updateCartoonFeatures(mesh, startGeo);
+            allCharacters.push(mesh);
+
+            parentGroup.add(mesh);
+            digitMeshes[id] = mesh;
+            return mesh;
+        }
+
+        function triggerJump(mesh) {
+            const existing = animations.find(a => a.mesh === mesh);
+            if (existing) {
+                existing.progress = 0;
+            } else {
+                animations.push({ mesh: mesh, progress: 0 });
+            }
+        }
+
+        loader.load('https://unpkg.com/three@0.160.0/examples/fonts/gentilis_bold.typeface.json', function (font) {
+            loadedFont = font;
+
+            for (let i = 0; i <= 9; i++) {
+                geoCache[i.toString()] = createGeo(i.toString(), 4);
+            }
+            const labels = ['Weeks', 'Days', 'Hours', 'Minutes', 'Seconds'];
+            labels.forEach(l => {
+                const geo = new TextGeometry(l, {
+                    font: loadedFont, size: 1.2, height: 0.4, curveSegments: 4,
+                    bevelEnabled: true, bevelThickness: 0.15, bevelSize: 0.1, bevelSegments: 4
+                });
+                geo.computeBoundingBox();
+                const xOffset = -0.5 * (geo.boundingBox.max.x - geo.boundingBox.min.x);
+                geo.translate(xOffset, 0, 0);
+                geoCache[l] = geo;
+            });
+
+            const topRowGroups = [
+                { idPrefix: 'w', label: 'Weeks' },
+                { idPrefix: 'd', label: 'Days' },
+                { idPrefix: 'h', label: 'Hours' }
+            ];
+
+            const bottomRowGroups = [
+                { idPrefix: 'm', label: 'Minutes' },
+                { idPrefix: 's', label: 'Seconds' }
+            ];
+
+            const topRow = new THREE.Group();
+            const bottomRow = new THREE.Group();
+
+            topRow.position.y = 5.5;
+            bottomRow.position.y = -6.5;
+
+            timerGroup.add(topRow);
+            timerGroup.add(bottomRow);
+
+            function buildRow(rowGroups, parentContainer) {
+                let cursorX = 0;
+                const blockSpacing = 5.0;
+                const digitSpacing = 0.5;
+
+                rowGroups.forEach(group => {
+                    const id1 = group.idPrefix + '1';
+                    const id0 = group.idPrefix + '0';
+                    const mat = materials[group.idPrefix];
+
+                    const mesh1 = createDigitSlot(id1, mat, parentContainer);
+                    const w1 = geoCache['0'].userData.width;
+                    cursorX += w1 / 2;
+                    mesh1.position.x = cursorX;
+                    mesh1.position.y = mesh1.userData.baseY;
+                    cursorX += w1 / 2 + digitSpacing;
+
+                    const mesh0 = createDigitSlot(id0, mat, parentContainer);
+                    const w0 = geoCache['0'].userData.width;
+                    cursorX += w0 / 2;
+                    mesh0.position.x = cursorX;
+                    mesh0.position.y = mesh0.userData.baseY;
+
+                    const centerX = mesh1.position.x + (mesh0.position.x - mesh1.position.x) / 2;
+                    const labelMesh = new THREE.Mesh(geoCache[group.label], mat); // Colored text
+                    labelMesh.position.set(centerX, -3.5, 0);
+                    parentContainer.add(labelMesh);
+
+                    cursorX += w0 / 2 + blockSpacing;
+                });
+
+                const totalWidth = cursorX - blockSpacing;
+                parentContainer.position.x = -totalWidth / 2;
+            }
+
+            buildRow(topRowGroups, topRow);
+            buildRow(bottomRowGroups, bottomRow);
+
+            // Floor removed entirely to eliminate all shadows
+
+            document.getElementById('loading').style.opacity = 0;
+            setTimeout(() => document.getElementById('loading').remove(), 500);
+
+            animate();
+        });
+
+        // --- Update Logic ---
+        function updateDigit(id, newValueStr) {
+            const mesh = digitMeshes[id];
+            if (!mesh || mesh.userData.currentVal === newValueStr) return;
+
+            const newGeo = geoCache[newValueStr];
+            mesh.geometry = newGeo;
+            mesh.userData.currentVal = newValueStr;
+
+            updateCartoonFeatures(mesh, newGeo);
+
+            triggerJump(mesh);
+        }
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            const now = Date.now();
+            let diff = now - targetDate;
+            if (diff < 0) diff = 0;
+
+            diff = Math.floor(diff / 1000);
+            const seconds = diff % 60;
+            diff = Math.floor(diff / 60);
+            const minutes = diff % 60;
+            diff = Math.floor(diff / 60);
+            const hours = diff % 24;
+            diff = Math.floor(diff / 24);
+            const days = diff % 7;
+            const weeks = Math.floor(diff / 7);
+
+            const wStr = weeks.toString().padStart(2, '0');
+            const dStr = days.toString().padStart(2, '0');
+            const hStr = hours.toString().padStart(2, '0');
+            const mStr = minutes.toString().padStart(2, '0');
+            const sStr = seconds.toString().padStart(2, '0');
+
+            if (loadedFont) {
+                updateDigit('w1', wStr[0]);
+                updateDigit('w0', wStr[1]);
+                updateDigit('d1', dStr[0]);
+                updateDigit('d0', dStr[1]);
+                updateDigit('h1', hStr[0]);
+                updateDigit('h0', hStr[1]);
+                updateDigit('m1', mStr[0]);
+                updateDigit('m0', mStr[1]);
+                updateDigit('s1', sStr[0]);
+                updateDigit('s0', sStr[1]);
+            }
+
+            // Idle Animation (Hair wiggle & Eyes looking around)
+            allCharacters.forEach(mesh => {
+                const phase = time * 3 + mesh.userData.hairPhase;
+                if (mesh.userData.hair) {
+                    mesh.userData.hair.rotation.z = Math.sin(phase) * 0.05;
+                }
+
+                if (mesh.userData.leftPupil && mesh.userData.rightPupil) {
+                    // Playful eye movement using different frequencies for x and y
+                    const lookX = Math.sin(time * 1.5 + mesh.userData.hairPhase) * 0.12;
+                    const lookY = Math.sin(time * 0.8 + mesh.userData.hairPhase) * 0.08;
+
+                    mesh.userData.leftPupil.position.set(lookX, lookY, 0.25);
+                    mesh.userData.rightPupil.position.set(lookX, lookY, 0.25);
+                }
+            });
+
+            // Process Jump & Squash-Stretch animations
+            for (let i = animations.length - 1; i >= 0; i--) {
+                const anim = animations[i];
+                const speed = 12;
+
+                anim.progress += delta * speed;
+
+                if (anim.progress >= Math.PI) {
+                    anim.mesh.position.y = anim.mesh.userData.baseY;
+                    anim.mesh.scale.set(1, 1, 1);
+
+                    if (anim.mesh.userData.hair) {
+                        anim.mesh.userData.hair.rotation.x = 0; // reset hair
+                    }
+
+                    animations.splice(i, 1);
+                } else {
+                    const jumpHeight = 2.0;
+                    const sinP = Math.sin(anim.progress);
+
+                    anim.mesh.position.y = anim.mesh.userData.baseY + sinP * jumpHeight;
+
+                    // Squash & Stretch
+                    const scaleY = 1.0 - 0.25 * Math.cos(anim.progress * 2);
+                    const scaleXZ = 1.0 / scaleY;
+                    anim.mesh.scale.set(scaleXZ, scaleY, scaleXZ);
+
+                    // Hair flops backward when jumping up, forward when falling
+                    if (anim.mesh.userData.hair) {
+                        const hairFlop = Math.cos(anim.progress) * (Math.PI / 8);
+                        anim.mesh.userData.hair.rotation.x = hairFlop;
+                    }
+                }
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>
